@@ -1,0 +1,63 @@
+{
+  "name": "dsh-context-fold",
+  "version": "0.1.3",
+  "description": "DSH 上下文折叠插件：超长工具结果确定性折叠落盘、compaction 折叠账本与回捞、跨会话记忆写入与注入。与 billion-context (ACP) 互补。",
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "plugin",
+    "context",
+    "compaction",
+    "memory",
+    "pruner"
+  ],
+  "license": "MIT",
+  "author": "dsh-context-fold contributors",
+  "homepage": "https://github.com/yyfdfsyyf-source/dsh-context-fold",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yyfdfsyyf-source/dsh-context-fold.git"
+  },
+  "bugs": {
+    "url": "https://github.com/yyfdfsyyf-source/dsh-context-fold/issues"
+  },
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./core/*": "./lib/core/*.js",
+    "./lib/*": "./lib/*.js"
+  },
+  "files": [
+    "lib",
+    "locale",
+    "cordis.patch.yml",
+    "icon.svg",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\""
+  },
+  "peerDependencies": {
+    "@deepseek-ai/schemastery": "*"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

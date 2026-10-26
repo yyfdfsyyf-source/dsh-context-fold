@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Context Fold",
+    "description": "Deterministic folding of oversized tool results, a searchable compaction ledger, and cross-session memory injection. Complements billion-context (ACP)."
+  }
+}

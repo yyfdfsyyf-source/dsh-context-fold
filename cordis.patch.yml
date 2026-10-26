@@ -1,0 +1,27 @@
+# dsh-context-fold 的 bundle patch。
+#
+# 说明：patch 会**整体替换** `config` 对象，所以这里把需要的键全部写出来。
+# 注释掉的行就是默认值，改哪项取消注释即可。
+
+- insert:
+    - id: context-fold
+      name: dsh-context-fold
+      config:
+        # complement = 三块能力全开；off = 全部静默禁用（保留 context_fold 工具用于查看状态）
+        mode: complement
+
+        pruner:
+          enabled: true
+          maxChars: 8000
+          keepHead: 2000
+          keepTail: 2000
+
+        memory:
+          enabled: true
+          injectLimit: 6
+          maxInjectTokens: 1200
+          decayHalfLifeDays: 30
+
+        ledger:
+          enabled: true
+          maxBlocks: 2000

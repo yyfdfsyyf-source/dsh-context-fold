@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "上下文折叠",
+    "description": "超长工具结果的确定性折叠落盘、可检索的 compaction 折叠账本、以及跨会话记忆注入。与 billion-context (ACP) 互补。"
+  }
+}
