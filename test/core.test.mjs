@@ -20,7 +20,7 @@ import { decayFactor, rankMemories, selectWithinBudget, shouldRefreshInjection, 
 import { normalizePath, deriveScope, scopeAffinity, shouldExcludeInStrictMode, applyScopeWeight } from '../lib/core/scope.js'
 import { estimateTokens, byteLength, maxCharsForTokens, truncateToTokens, slugId, CHARS_PER_TOKEN } from '../lib/core/tokens.js'
 import { DEFAULT_CONFIG, normalizeConfig, validateConfig } from '../lib/config.js'
-import { recordFromSessionEvent } from '../lib/ledger.js'
+import { recordFromSessionEvent, recordFromFold } from '../lib/ledger.js'
 import { parseExtraction, buildInjectionText, MEMORY_TYPES, MAX_PER_TURN, MIN_PER_TURN } from '../lib/memory.js'
 import { foldContentBlocks, scanSessionForFoldables } from '../lib/prune.js'
 
@@ -388,10 +388,58 @@ test('ledger: 从真实 compaction/summary payload 映射记录', () => {
   assert.equal(record.shadowedCount, 3)
 })
 
-test('ledger: 非 compaction/summary 事件返回 null', () => {
+test('ledger: 非折叠类事件返回 null', () => {
   assert.equal(recordFromSessionEvent({ id: 's' }, { type: 'tool/result', seq: 1, data: {} }), null)
   assert.equal(recordFromSessionEvent({ id: 's' }, null), null)
   assert.equal(recordFromSessionEvent({ id: 's' }, { type: 'compaction/start', seq: 1, data: {} }), null)
+  assert.equal(recordFromSessionEvent({ id: 's' }, { type: 'compaction/end', seq: 2, data: {} }), null)
+})
+
+test('ledger: 从 billion-context 真实 compaction/prune payload 映射记录（bili lane 上真正发生的遮蔽）', () => {
+  const session = {
+    id: 'sess-bili',
+    eventAt(seq) {
+      if (seq === 133) {
+        return { type: 'tool/result', data: { message: { content: [{ type: 'text', text: 'parser 重构决定把 tokenizer 抽成独立模块' }] } } }
+      }
+      return undefined
+    },
+  }
+  const event = {
+    type: 'compaction/prune',
+    seq: 499,
+    time: 1700000000000,
+    // 真实 payload（88 个会话日志扫描确认）：没有 summary 字段
+    data: {
+      shadowedRange: { start: 133, end: 133 },
+      shadowedSeqs: [133],
+      shadowedTokenCount: 2067,
+    },
+  }
+  const record = recordFromSessionEvent(session, event)
+  assert.equal(record.blockId, 'prune-133-133-499')
+  assert.equal(record.startSeq, 133)
+  assert.equal(record.endSeq, 133)
+  assert.equal(record.shadowedTokenCount, 2067)
+  assert.equal(record.source, 'compaction-prune')
+  assert.equal(record.shadowedCount, 1)
+  assert.equal(record.sessionId, 'sess-bili')
+  // 没有 summary 字段时，从被遮蔽的 seq 抽 preview 供 BM25 检索
+  assert.match(record.summary, /tokenizer/)
+})
+
+test('ledger: recordFromFold 把自身折叠映射为可检索记录', () => {
+  const record = recordFromFold(
+    { id: 'call_abc-0', bytes: 9999, before: 9999, after: 4000, savedTokens: 1714 },
+    { sessionId: 'sess-1', callId: 'call_abc', originalText: '循环依赖重构与 tokenizer 抽取的完整原文', seq: 53 },
+  )
+  assert.equal(record.blockId, 'call_abc-0')
+  assert.equal(record.source, 'self-fold')
+  assert.equal(record.bytes, 9999)
+  assert.equal(record.savedTokens, 1714)
+  assert.equal(record.sessionId, 'sess-1')
+  assert.equal(record.callId, 'call_abc')
+  assert.match(record.summary, /tokenizer/)
 })
 
 test('ledger: 缺失 shadowedRange 时降级到 0', () => {

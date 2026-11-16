@@ -38,19 +38,32 @@ DSH（DeepSeek Harness）的**上下文折叠**插件。三块互补能力：把
 
 ### B. 折叠账本 + 回捞（`session/event`）
 
-监听 `session/event`，当事件类型是 `compaction/summary` 时，把被遮蔽区间追加到
-`<DSH_HOME>/context-fold/ledger.jsonl`：
+监听 `session/event`，把三类遮蔽事件追加到 `<DSH_HOME>/context-fold/ledger.jsonl`：
+
+| 来源 | `source` 字段 | 说明 |
+|---|---|---|
+| `compaction/summary` | `compaction-summary` | DSH 原生压缩后端（未启用 ACP 时） |
+| `compaction/prune` | `compaction-prune` | billion-context 接管压缩时**实际发生**的遮蔽 |
+| 本插件自身折叠 | `self-fold` | 能力 A 每次折叠都入账（`tools/post-execute`） |
 
 ```json
 { "blockId": "...", "startSeq": 10, "endSeq": 40, "shadowedTokenCount": 1234,
-  "summary": "...", "ts": 1700000000000, "summarySeq": 42, "sessionId": "..." }
+  "summary": "...", "ts": 1700000000000, "summarySeq": 42, "sessionId": "...", "source": "self-fold" }
 ```
 
-> **字段来源说明（重要）**：真实的 `compaction/summary` payload 里**没有** `blockId`，也没有顶层
-> `startSeq` / `endSeq`。实际结构是
-> `{ compactionId, summary, shadowedRange: { start, end }, shadowedSeqs, shadowedTokenCount, provider, model, ... }`。
-> 本插件做映射：`blockId ← compactionId`、`startSeq ← shadowedRange.start`、`endSeq ← shadowedRange.end`、
-> `ts ← event.time`；另外补充 `summarySeq ← event.seq`、`sessionId ← session.id` 便于精确定位。
+> **v0.2.0 关键修复：账本曾完全空置。** 真实环境扫描 88 个会话文件发现：`compaction/summary` 事件
+> **0 条**，实际发生的是 `compaction/prune`（26 条）/ `compaction/start` / `compaction/end`。根因是本机的
+> billion-context 主动拒绝 DSH 原生压缩（`dsh_compaction_refused`，要求显式 `allowDshCompaction`），
+> 于是承载摘要的 `compaction/summary` 永不触发，v0.1.3 只认这一种事件的账本逻辑等于死代码，
+> `ledger.jsonl` 从未被创建。v0.2.0 改三点：① 同时认 `compaction/prune`（从被遮蔽 seq 抽 preview 供检索）；
+> ② 自身折叠通过 `recordFromFold()` 入账；③ 记录带 `source` 字段区分来源。
+
+> **字段来源说明**：`compaction/summary` payload 里**没有** `blockId`，也没有顶层 `startSeq`/`endSeq`，
+> 实际是 `{ compactionId, summary, shadowedRange: { start, end }, shadowedSeqs, shadowedTokenCount, ... }`。
+> 映射：`blockId ← compactionId`、`startSeq ← shadowedRange.start`、`endSeq ← shadowedRange.end`、
+> `ts ← event.time`、`summarySeq ← event.seq`、`sessionId ← session.id`。
+> `compaction/prune` payload 是 `{ shadowedRange, shadowedSeqs, shadowedTokenCount }`（**无 summary**），
+> 摘要从 `shadowedSeqs` 指向的事件文本里抽前 1200 字符。
 
 `context_fold recall <id|关键词>`：
 
@@ -231,12 +244,12 @@ ln -s /path/to/plugins/dsh-context-fold node_modules/dsh-context-fold   # Window
 npm test          # = node --test "test/*.test.mjs"
 ```
 
-**81 个用例，全部通过**（约 1.5s），分三层：
+**84 个用例，全部通过**（约 1.8s），分三层：
 
 | 文件 | 用例数 | 测什么 |
 |---|---:|---|
-| `test/core.test.mjs` | 44 | 纯函数，不碰 `ctx`：BM25 排序稳定性与中文 bigram、`decideFold` 边界、时间衰减单调性、区域切分、配置校验、账本字段映射、记忆解析 |
-| `test/integration.test.mjs` | 34 | 通过公开入口 `apply(ctx, config)` 装配，用 mock ctx 驱动宿主事件、真实临时 `DSH_HOME` 落盘，验证三块能力端到端闭环、记忆作用域（prefer/strict/off）、**turn-stopping 不阻塞**（含 `background`/`blocking`/`off` 三模式与短转录跳过）以及所有降级路径 |
+| `test/core.test.mjs` | 46 | 纯函数，不碰 `ctx`：BM25 排序稳定性与中文 bigram、`decideFold` 边界、时间衰减单调性、区域切分、配置校验、账本字段映射（含 `compaction/prune` 真实 payload 与 `recordFromFold`）、记忆解析 |
+| `test/integration.test.mjs` | 35 | 通过公开入口 `apply(ctx, config)` 装配，用 mock ctx 驱动宿主事件、真实临时 `DSH_HOME` 落盘，验证三块能力端到端闭环、自身折叠入账 + BM25 关键词命中、记忆作用域（prefer/strict/off）、**turn-stopping 不阻塞**（含 `background`/`blocking`/`off` 三模式与短转录跳过）以及所有降级路径 |
 | `test/scope.test.mjs` | 3 | 作用域**来源**：写入用 `session.header.cwd` 而非 `process.cwd()`、无 header 时退化、`setScope` 改变排序并让注入缓存失效 |
 
 集成测试同时充当**最小宿主契约文档**：mock ctx 只实现插件真正用到的四个成员 `on` / `get` / `effect` / `logger`——插件对宿主的依赖面就这么窄。
@@ -274,9 +287,46 @@ import { selectKeptRegions } from 'dsh-context-fold/core/region'
 
 ---
 
-## 十、相关文档
+## 十、版本适配与效果测评
+
+### 兼容性（v0.2.0 新增 `engines.dsh`）
+
+从 DSH `v0.2.1-alpha.3` 起，插件兼容性检查**优先读 `engines.dsh`**（只有缺失时才回退到
+`peerDependencies`）。本插件声明：
+
+```json
+"engines": { "node": ">=22.19.0", "dsh": ">=0.2.2-rc.1 <0.3.0-0" }
+```
+
+该范围在严格 semver 下覆盖当前宿主的 `0.2.2-rc.3`，同时排除 `0.3.x`。经核对，本插件用到的
+全部宿主契约（`tools/post-execute`、`session/event`、`agent/turn-stopping`、
+`system-prompt/assemble`、`tools.register`、`SessionHeader`、事件 Map）在 `0.2.2-rc.3`
+中均未发生破坏性变更；84 个用例全绿。关于 `session.header.cwd`：DSH `v0.2.1-alpha.1` 起
+把它明确为"原始项目标识"，恰好符合本插件 scope 的用途（当前执行目录另由 `workingDirectory`
+服务承载，本插件不需要它）。
+
+### 效果测评（`bench/benchmark.mjs`，可复现）
+
+以本机 88 个真实会话文件为语料，量化五项指标（完整输出见 `docs/benchmark-report.txt`）：
+
+| 指标 | 结果 |
+|---|---|
+| M1 折叠覆盖与省 token | 379/4701 条可折叠（8.1%），折叠这些结果**节省 40.4% token**（约 147.7 万） |
+| M2 回捞字节保真 | spill = 原文，逐字节还原 **PASS** |
+| M3 账本 BM25 命中 | 关键词自检索 **77.0%** 命中；修复前账本数据源为 0 |
+| M4 注入前缀稳定 | 小增量（<2 条）不重算、recall 变化才刷新，**PASS**（保住 provider KV 缓存） |
+| M5 折叠延迟 | 纯函数判定 ~1.88 µs/次，落盘异步 fire-and-forget，不阻塞请求路径 |
+
+> 测评同时纠正了一个误判：进程级计数器在宿主重启后会清零，不能用 `context_fold status`
+> 里的 `folds: 0` 判断能力失效。查持久化日志可见折叠标记出现 **71 次**、记忆注入 **27 次**——
+> 能力 A/C 一直在工作，只有能力 B（账本）因数据源问题真正失效，已在 v0.2.0 修复。
+
+---
+
+## 十一、相关文档
 
 - [`docs/design.md`](docs/design.md) — 设计文档：宿主扩展点、DSH 压缩契约（源码级）、
   三块能力的数据流与失败模式、自建基准的方法与结果、安装与回滚、已知限制。
 - [`docs/ecosystem-survey.md`](docs/ecosystem-survey.md) — 生态调研：20+ 个开源 agent 与
   50+ 个 DSH 插件在压缩 / 记忆上的实现对照，含证据分级、真实故障案例与运行时开销分析。
+- [`docs/benchmark-report.txt`](docs/benchmark-report.txt) — 效果测评原始输出（`node bench/benchmark.mjs` 可复现）。

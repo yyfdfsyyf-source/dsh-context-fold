@@ -485,6 +485,12 @@ ctx.set('compaction', impl) // 注入
    - `memory.minTranscriptChars`（默认 400）：过短回合直接跳过，连一次调用都不发。
    - `blocking` 仅保留给需要确定性时序的场景（测试/脚本），`off` 彻底关闭。
    - 测试用 `delayMs: 120` 的假 LLM 断言监听器在 60ms 内返回，并覆盖 blocking/off/短转录三条分支。
+10. **账本数据源曾完全空置——已修复（v0.2.0）。** 原始缺陷：`lib/ledger.js` 的 `recordFromSessionEvent()` 只认 `compaction/summary` 一种事件。用 `bench/probe-payloads.mjs` 扫描本机 88 个真实会话文件发现：`compaction/summary` **0 条**，实际发生的是 `compaction/prune`（26 条）/ `compaction/start`（58）/ `compaction/end`（58）。根因是 billion-context 通过 `dsh_compaction_refused`（宿主报错原文："bili owns compression on this lane ... opt in explicitly: allowDshCompaction / BILI_ALLOW_DSH_COMPACTION=1"）主动拒绝 DSH 原生压缩，承载摘要的 `compaction/summary` 因此永不触发。结论：账本是死代码，`ledger.jsonl` 从未创建，`context_fold recall` 的账本分支永远空转。修法：
+    - `recordFromSessionEvent()` 新增 `compaction/prune` 分支：payload 为 `{ shadowedRange, shadowedSeqs, shadowedTokenCount }`（**无 summary**），从 `shadowedSeqs` 指向事件的文本里抽前 1200 字符作摘要，`blockId = prune-<start>-<end>-<seq>`。
+    - 新增 `recordFromFold()`：能力 A 每次自身折叠都入账（`source: 'self-fold'`），摘要取原文前 1200 字符，让关键词检索通路在 bili lane 上真正有数据。
+    - 两类记录都带 `source` 字段区分来源；`test/core.test.mjs` 用真实 payload 形状锁定映射，`test/integration.test.mjs` 断言自身折叠入账且 BM25 可按关键词命中。
+    - **测评教训**：进程级计数器在宿主重启后清零，`context_fold status` 的 `folds: 0 / memoryWrites: 0` 是假象；查持久化日志可见折叠标记 71 次、记忆注入 27 次。判断长期功能生效必须看日志，不看进程内计数器。
+11. **版本适配（v0.2.0）：补 `engines.dsh`。** DSH `v0.2.1-alpha.3` 起兼容性检查优先读 `engines.dsh`（缺失才回退 peerDependencies）。声明 `>=0.2.2-rc.1 <0.3.0-0`：严格 semver 下覆盖当前宿主 `0.2.2-rc.3` 且排除 0.3.x，与已装 dsh-rewind-plugin/dsh-ops 的区间写法一致。核对全部用到的宿主契约在 `0.2.2-rc.3` 中无破坏性变更；`session.header.cwd` 语义被官方重新定义为"原始项目标识"，与 scope 用途吻合（当前执行目录另由 `workingDirectory` 服务承载，本插件不需要）。
 
 ---
 

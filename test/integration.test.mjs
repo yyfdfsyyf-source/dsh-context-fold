@@ -206,6 +206,33 @@ test('折叠：超长工具结果被折叠、原文落盘、可 recall 取回', 
   assert.equal(status.counters.folds, 1)
   assert.ok(status.counters.savedTokensEstimate > 0)
   assert.equal(status.capabilities.pruner.ready, true)
+
+  // 本次自身折叠应入账（bili lane 上 compaction/summary 永不触发，账本靠这条通路才不空置）
+  await tick()
+  const ledger = await host.tool().execute({ action: 'ledger' })
+  assert.equal(ledger.total, 1, '自身折叠必须写入账本')
+  assert.equal(ledger.entries[0].source, 'self-fold')
+  assert.equal(ledger.entries[0].blockId, 'call_7-0')
+})
+
+test('账本：自身折叠的原文摘要可按关键词 BM25 命中', async (t) => {
+  withTempHome(t)
+  const host = makeHost()
+  apply(host.ctx, {})
+
+  const original = '重构 parser 时决定把 tokenizer 抽成独立模块'.repeat(400)
+  const listener = host.one('tools/post-execute')
+  await listener(
+    { callId: 'call_kw', name: 'bash' },
+    { isError: false, value: {}, content: [{ type: 'text', text: original }] },
+    async () => ({ kind: 'accept', content: [{ type: 'text', text: original }] }),
+  )
+  await tick()
+
+  const hit = await host.tool().execute({ action: 'recall', query: 'tokenizer' })
+  assert.equal(hit.ok, true)
+  assert.equal(hit.ledger.mode, 'bm25')
+  assert.ok(hit.ledger.hits.some((h) => h.blockId === 'call_kw-0'), '自身折叠记录应被关键词检索到')
 })
 
 test('折叠：短结果原样透传（返回同一个 decision 对象）', async (t) => {
