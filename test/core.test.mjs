@@ -305,9 +305,29 @@ test('config: 空配置等于默认值', () => {
       minTranscriptChars: 400,
     },
     ledger: { enabled: true, maxBlocks: 2000 },
+    engine: {},
   })
   assert.deepEqual(warnings, [])
   assert.deepEqual(DEFAULT_CONFIG.pruner, { enabled: true, maxChars: 8000, keepHead: 2000, keepTail: 2000 })
+})
+
+test('config: engine 模式被接受且 engine 参数整体透传', () => {
+  const { config, warnings } = normalizeConfig({
+    mode: 'engine',
+    engine: { thresholdRatio: 0.7, headroomTokens: 12345, modelPolicies: [{ provider: 'p', model: 'm' }] },
+  })
+  assert.equal(config.mode, 'engine')
+  assert.equal(config.engine.thresholdRatio, 0.7)
+  assert.equal(config.engine.headroomTokens, 12345)
+  assert.deepEqual(config.engine.modelPolicies, [{ provider: 'p', model: 'm' }])
+  assert.deepEqual(warnings, [])
+})
+
+test('config: engine 非对象回退空对象并 warning', () => {
+  const { config, warnings } = normalizeConfig({ mode: 'engine', engine: 'nope' })
+  assert.equal(config.mode, 'engine')
+  assert.deepEqual(config.engine, {})
+  assert.ok(warnings.some((w) => w.includes('engine')))
 })
 
 test('config: 部分配置与默认值合并', () => {

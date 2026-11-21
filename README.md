@@ -144,7 +144,7 @@ DSH（DeepSeek Harness）的**上下文折叠**插件。三块互补能力：把
 写在 `cordis.patch.yml` 的 `config` 下（patch 会**整体替换** `config` 对象，所以需要哪些键就都写上）：
 
 ```yaml
-mode: complement          # complement | off
+mode: complement          # complement | off | engine（engine = 占用宿主 compaction 槽位，见 §十二）
 pruner:
   enabled: true
   maxChars: 8000          # 超过这个字符数才折叠
@@ -162,6 +162,9 @@ memory:
 ledger:
   enabled: true
   maxBlocks: 2000         # 账本最多保留多少条（超出裁剪最旧的）
+# engine 模式专用：整体透传给 lib/engine 的压缩参数（与官方 BasicCompactionConfig 对齐）。
+# 省略任一键即用官方默认值；完整键表见 lib/engine/config.js 的 DEFAULT_ENGINE_CONFIG。
+engine: {}                # 例：{thresholdRatio: 0.8, headroomTokens: 65536, retainRatio: 0.16}
 ```
 
 约束：`keepHead + keepTail` 必须**小于** `maxChars`，否则永远不会折叠（`status` 与 `validateConfig` 会报出来）。
@@ -330,3 +333,27 @@ import { selectKeptRegions } from 'dsh-context-fold/core/region'
 - [`docs/ecosystem-survey.md`](docs/ecosystem-survey.md) — 生态调研：20+ 个开源 agent 与
   50+ 个 DSH 插件在压缩 / 记忆上的实现对照，含证据分级、真实故障案例与运行时开销分析。
 - [`docs/benchmark-report.txt`](docs/benchmark-report.txt) — 效果测评原始输出（`node bench/benchmark.mjs` 可复现）。
+- [`docs/takeover-roadmap.md`](docs/takeover-roadmap.md) — 分阶段接管 DSH 内置上下文管理的路线图、四维度验收目标与回退方案。
+- [`docs/takeover-probe-0.md`](docs/takeover-probe-0.md) — 阶段 0 可行性探针：为什么同名 `ctx.provide('compaction')` 不可行、占槽是唯一路径。
+- [`docs/takeover-patch.example.yml`](docs/takeover-patch.example.yml) — engine 模式占槽 patch 示例（三 preset 完整快照，仅供照抄，勿直接覆盖 profile）。
+
+---
+
+## 十二、engine 模式：接管宿主主压缩（实验性，v0.3.0）
+
+`mode: engine` 让本插件**占用宿主的 `compaction` 服务槽位**，用自包含的压缩引擎
+（逐行移植官方 `dsh-compaction-basic` 的检查点事务）替代官方后端。三方法
+`compactIfNeeded / compactNow / compactRegion` 与官方契约一致，检查点事务
+（`compaction/start → compaction/summary → user/message replace → compaction/end`）、
+工具调用配对、token 口径、并发锁均按官方源码实现；摘要仍走 `ctx.llm.stream`，
+可沿用 billion-context 的 token 预算策略。
+
+**这是替换、不是共存**：同一 context 只能有一个 `compaction` 实现（Cordis 服务同名即报错）。
+占槽需在 profile 的 patch 层按官方"整块 config 替换"配方改写 preset 的 compaction group
+（把 `compaction-basic` 标 `disabled: true`、插入本插件 `mode: engine` 的 entry），
+并关闭 `bili-native`、但**保留 `bili-compaction-gate`**。完整配方与两种策略变体见
+[`docs/takeover-patch.example.yml`](docs/takeover-patch.example.yml) 与
+[`docs/takeover-roadmap.md`](docs/takeover-roadmap.md)。
+
+警告：preset 快照与 DSH 版本绑定，升级后须重新 dump/diff/复制；此模式默认**不启用**，
+普通用户请继续用 `complement`。engine 模式下的运行时告警是降级的（不会因同名冲突让插件加载失败）。

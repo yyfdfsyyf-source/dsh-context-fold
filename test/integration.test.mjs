@@ -163,6 +163,41 @@ test('装配：mode=off 时不挂任何能力监听器，但工具仍在', (t) =
   assert.ok(host.tool(), 'mode=off 仍应注册状态工具')
 })
 
+test('装配：mode=engine 占用 compaction 槽位，且不重复注册 complement 能力', (t) => {
+  withTempHome(t)
+  const host = makeHost()
+  // engine 分支只调用 ctx.provide，其余能力监听器/工具都不应注册。
+  const provided = new Map()
+  host.ctx.provide = (key, value) => {
+    provided.set(key, value)
+    return () => {}
+  }
+
+  apply(host.ctx, { mode: 'engine', engine: { thresholdRatio: 0.7 } })
+
+  assert.ok(provided.has('compaction'), 'engine 模式应 provide compaction 服务')
+  const engine = provided.get('compaction')
+  assert.equal(typeof engine.compactIfNeeded, 'function')
+  assert.equal(typeof engine.compactNow, 'function')
+  assert.equal(typeof engine.compactRegion, 'function')
+  assert.equal(engine.config.thresholdRatio, 0.7, 'engine 参数应透传到引擎')
+  // engine entry 提前返回，不应注册工具/折叠/账本/记忆。
+  assert.equal(host.registeredTools.length, 0, 'engine entry 不应注册 context_fold 工具')
+  assert.equal(host.listeners('tools/post-execute').length, 0)
+  assert.equal(host.listeners('session/event').length, 0)
+  assert.equal(host.listeners('agent/turn-stopping').length, 0)
+})
+
+test('装配：engine 模式同名冲突时降级告警而不抛错', (t) => {
+  withTempHome(t)
+  const host = makeHost()
+  host.ctx.provide = () => {
+    throw new Error('service "compaction" has been registered')
+  }
+
+  assert.doesNotThrow(() => apply(host.ctx, { mode: 'engine' }))
+})
+
 // ─────────────────────── 2. 能力 A：确定性折叠 ───────────────────────
 
 test('折叠：超长工具结果被折叠、原文落盘、可 recall 取回', async (t) => {

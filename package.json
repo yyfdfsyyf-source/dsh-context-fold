@@ -1,7 +1,7 @@
 {
   "name": "dsh-context-fold",
-  "version": "0.2.0",
-  "description": "DSH 上下文折叠插件：超长工具结果确定性折叠落盘、compaction 折叠账本与回捞、跨会话记忆写入与注入。与 billion-context (ACP) 互补。",
+  "version": "0.3.0",
+  "description": "DSH 上下文管理插件：超长工具结果折叠落盘、compaction 折叠账本与回捞、跨会话记忆；engine 模式可用自包含压缩引擎占用宿主 compaction 槽位，替代官方后端。",
   "keywords": [
     "deepseek-harness",
     "dsh",
