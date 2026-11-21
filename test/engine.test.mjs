@@ -32,6 +32,13 @@ import {
   assertNoActiveCompaction,
 } from '../lib/engine/region.js'
 import { createEngine, apply, name as engineName } from '../lib/engine/index.js'
+import {
+  ANCHOR_MARKERS,
+  DEFAULT_ANCHOR_LIMITS,
+  markerSentences,
+  extractAnchors,
+  appendAnchors,
+} from '../lib/engine/anchors.js'
 
 /* ── faithful mock session ─────────────────────────────────────────── */
 
@@ -432,6 +439,88 @@ test('三个入口在无可压缩区间 / 服务缺失时返回 null', async () 
 })
 
 /* ── 额外：apply 注册 compaction 服务 / checkpoint helpers / config ── */
+
+/* ── 阶段2：确定性关键事实锚点 ─────────────────────────────────────── */
+
+test('anchors: markerSentences 只抽带标记词的完整句并去重限长', () => {
+  const text = [
+    '无关的开场白描述了一些背景但不重要。',
+    '所有请求必须带上 x-request-id 这个头，不能省略。',
+    '这里随便写点东西没有标记词。',
+    '所有请求必须带上 x-request-id 这个头，不能省略。', // 重复句应去重
+    '函数签名是 normalizeError(e: unknown)，务必保持。',
+  ].join('\n')
+  const sentences = markerSentences(text)
+  assert.ok(sentences.length >= 2)
+  assert.ok(sentences.some((s) => s.includes('x-request-id')))
+  assert.ok(sentences.some((s) => s.includes('normalizeError')))
+  // 去重：带 x-request-id 的句子只应保留一条
+  assert.equal(sentences.filter((s) => s.includes('x-request-id')).length, 1)
+  // 无标记词的句子不应入选
+  assert.ok(!sentences.some((s) => s.includes('开场白')))
+})
+
+test('anchors: extractAnchors 跨消息去重并遵守总长上限', () => {
+  const messages = [
+    { role: 'user', content: [{ type: 'text', text: '决定统一用英语提交信息，必须遵守。' }] },
+    { role: 'assistant', content: [{ type: 'text', text: '决定统一用英语提交信息，必须遵守。' }] }, // 跨消息重复
+    { role: 'user', content: [{ type: 'text', text: '根因是缓存键没带 scope，不能复用。' }] },
+  ]
+  const anchors = extractAnchors(messages)
+  assert.equal(anchors.length, 2)
+  const total = anchors.reduce((n, s) => n + s.length + 1, 0)
+  assert.ok(total <= DEFAULT_ANCHOR_LIMITS.totalChars)
+
+  // 收紧总长上限时只保留第一条
+  const tight = extractAnchors(messages, { totalChars: 30 })
+  assert.ok(tight.length <= 1)
+})
+
+test('anchors: appendAnchors 形状正确，无锚点时原样返回', () => {
+  const summary = [{ type: 'text', text: 'body' }]
+  assert.equal(appendAnchors(summary, []), summary)
+  const withAnchors = appendAnchors(summary, ['必须带 x-request-id'])
+  assert.equal(withAnchors.length, 2)
+  assert.ok(withAnchors[1].text.includes('Recovered Critical Facts'))
+  assert.ok(withAnchors[1].text.includes('- 必须带 x-request-id'))
+  assert.equal(withAnchors[0], summary[0])
+})
+
+test('anchors: createSummarize 把锚点附加到 summary，rawOutput 保持 LLM 原样', async () => {
+  const session = standardSession()
+  // 在被遮蔽消息里埋一条带标记词的约束句
+  session._seed({
+    type: 'user/message',
+    data: { text: '这里约定：所有日志必须带 trace-id。' },
+    tokens: 200,
+    heuristicTokens: 300,
+  })
+  const ctx = makeCtx()
+  const engine = createEngine(ctx, { modelPolicies: [] })
+  const result = await engine.compactRegion(2, session.surface.nodes.at(-1), makeAgent(session))
+  const summaryText = result.summary.map((b) => b.text ?? '').join('\n')
+  assert.ok(summaryText.includes('Recovered Critical Facts'))
+  assert.ok(summaryText.includes('trace-id'))
+  // rawOutput 不能被锚点污染
+  const rawText = (result.rawOutput ?? []).map((b) => b.text ?? '').join('\n')
+  assert.ok(!rawText.includes('Recovered Critical Facts'))
+})
+
+test('anchors: recoverCriticalAnchors=false 时关闭锚点', async () => {
+  const session = standardSession()
+  session._seed({
+    type: 'user/message',
+    data: { text: '这里约定：所有日志必须带 trace-id。' },
+    tokens: 200,
+    heuristicTokens: 300,
+  })
+  const ctx = makeCtx()
+  const engine = createEngine(ctx, { modelPolicies: [], recoverCriticalAnchors: false })
+  const result = await engine.compactRegion(2, session.surface.nodes.at(-1), makeAgent(session))
+  const summaryText = result.summary.map((b) => b.text ?? '').join('\n')
+  assert.ok(!summaryText.includes('Recovered Critical Facts'))
+  assert.equal(result.recoveredAnchors, undefined)
+})
 
 test('apply(ctx) 通过 provide 注册 compaction 服务', () => {
   const ctx = makeCtx()

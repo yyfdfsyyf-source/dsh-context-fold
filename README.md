@@ -336,6 +336,7 @@ import { selectKeptRegions } from 'dsh-context-fold/core/region'
 - [`docs/takeover-roadmap.md`](docs/takeover-roadmap.md) — 分阶段接管 DSH 内置上下文管理的路线图、四维度验收目标与回退方案。
 - [`docs/takeover-probe-0.md`](docs/takeover-probe-0.md) — 阶段 0 可行性探针：为什么同名 `ctx.provide('compaction')` 不可行、占槽是唯一路径。
 - [`docs/takeover-patch.example.yml`](docs/takeover-patch.example.yml) — engine 模式占槽 patch 示例（三 preset 完整快照，仅供照抄，勿直接覆盖 profile）。
+- [`docs/phase2-report.md`](docs/phase2-report.md) — 阶段2 benchmark：标记词摘要 100% 留存的方法、oracle 排除核验，以及 5 方向里 3 项"无收益/负收益"的诚实结论。
 
 ---
 
@@ -357,3 +358,17 @@ import { selectKeptRegions } from 'dsh-context-fold/core/region'
 
 警告：preset 快照与 DSH 版本绑定，升级后须重新 dump/diff/复制；此模式默认**不启用**，
 普通用户请继续用 `complement`。engine 模式下的运行时告警是降级的（不会因同名冲突让插件加载失败）。
+
+### 阶段2：摘要质量超越官方（v0.4.0）
+
+engine 模式在 v0.3.0 只是"能力等价"。v0.4.0 引入**确定性关键事实锚点**：LLM 摘要后，
+再用通用标记词（必须/不能/约定/签名/根因…）从被遮蔽消息里抽出完整句，去重限长后附加为
+`Recovered Critical Facts`——专治"埋在长消息中段的约束被 LLM 摘要漏掉"。
+
+可复现 benchmark（`bench/run-phase2.mjs`，零模型调用）结果：针留存 **88.9% → 100%**
+（constraint 类 7/9 → 9/9），prompt token 反而略降（16549 → 16370），前缀稳定性不变（59.5%）。
+诚实结论：用户关心的 5 个方向里，只有"摘要质量"是真胜出；"token 精确计量"engine 模式本就
+走官方 `tokenMeter`，"记忆打通/检索 recall"在 benchmark 中是负收益（前缀稳定性/token 代价），
+故不塞进主压缩，仍留在 complement 模式。完整方法与结论见 [`docs/phase2-report.md`](docs/phase2-report.md)。
+
+可用 `recoverCriticalAnchors: false` 关闭锚点；全量测试 107/107 全绿。
